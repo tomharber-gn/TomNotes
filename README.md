@@ -2,6 +2,8 @@
 
 Onboarding exercise for creating a whiteboard application.
 
+Demo: https://tomharber-gn.github.io/TomNotes/
+
 ## Instructions
 
 ```

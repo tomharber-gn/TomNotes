@@ -15,23 +15,39 @@ type Stroke = {
 enum Mode {
   IDLE = "idle",
   DRAWING = "drawing",
+  PENDING = "pending",
   PANNING = "panning",
+  ZOOMING = "zooming",
 }
+
+const EmptyCoordinates: Coordinates = { x: 0, y: 0 };
 
 class Whiteboard {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
-  private mode: Mode.IDLE | Mode.DRAWING | Mode.PANNING = Mode.IDLE;
+  private mode: Mode = Mode.IDLE;
 
   // drawing
   private hasMoved: boolean = false;
 
   // panning
-  private panStart: Coordinates = { x: 0, y: 0 };
-  private offset: Coordinates = { x: 0, y: 0 };
-  private lastOffset: Coordinates = { x: 0, y: 0 };
+  private panStart: Coordinates = EmptyCoordinates;
+  private offset: Coordinates = EmptyCoordinates;
+  private lastOffset: Coordinates = EmptyCoordinates;
   private strokes: Stroke[] = [];
   private currentStroke: Stroke | null = null;
+
+  // zooming
+  private scale: number = 1;
+  private lastScale: number = 1;
+  private pinchStartDist: number = 0;
+  private pinchStartMid: Coordinates = EmptyCoordinates;
+  private pinchStartOffset: Coordinates = EmptyCoordinates;
+
+  // gesture discrimination
+  private gestureInitialDist: number = 0;
+  private gestureInitialMid: Coordinates = EmptyCoordinates;
+  private gestureThreshold: number = 10; // px threshold for discrimination
 
   constructor(canvasId: string) {
     this.canvas = document.getElementById(canvasId) as HTMLCanvasElement;
@@ -65,43 +81,88 @@ class Whiteboard {
 
   // ************* TOUCH EVENTS *************
   private handleTouchStart(e: TouchEvent): void {
-    console.log('e.touches.length :>> ', e.touches.length);
-    console.log('this.mode :>> ', this.mode);
-    console.log('this.hasMoved :>> ', this.hasMoved);
-
     if (e.touches.length === 2) {
-      this.startPanning(e);
+      this.mode = Mode.PENDING;
+      this.gestureInitialDist = this.getPinchDistance(e);
+      this.gestureInitialMid = this.getAverageCoordinates(e);
     } else if (e.touches.length === 1) {
       this.startDrawing(e);
     }
   }
 
   private handleTouchMove(e: TouchEvent): void {
-    if (this.mode === Mode.PANNING && e.touches.length === 2) {
-      this.continuePanning(e);
+    if (e.touches.length === 2) {
+      if (this.mode === Mode.PENDING) {
+        // Discriminate between pan and zoom
+        const dist = this.getPinchDistance(e);
+        const mid = this.getAverageCoordinates(e);
+        const distDelta = Math.abs(dist - this.gestureInitialDist);
+        const midDelta = Math.hypot(mid.x - this.gestureInitialMid.x, mid.y - this.gestureInitialMid.y);
+        if (distDelta > this.gestureThreshold) {
+          this.startZooming(e);
+        } else if (midDelta > this.gestureThreshold) {
+          this.startPanning(e);
+        }
+      } else if (this.mode === Mode.ZOOMING) {
+        this.continueZooming(e);
+      } else if (this.mode === Mode.PANNING) {
+        this.continuePanning(e);
+      }
     } else if (this.mode === Mode.DRAWING && e.touches.length === 1) {
       this.draw(e);
     }
   }
 
   private handleTouchEnd(e: TouchEvent): void {
-    if (this.mode === Mode.PANNING && e.touches.length < 2) {
-      this.stopPanning();
+    if ((this.mode === Mode.ZOOMING || this.mode === Mode.PANNING) && e.touches.length < 2) {
+      if (this.mode === Mode.ZOOMING) this.stopZooming();
+      if (this.mode === Mode.PANNING) this.stopPanning();
     } else if (this.mode === Mode.DRAWING && e.touches.length === 0) {
-      this.stopDrawing(e);
+      this.stopDrawing();
     }
   }
-  
+
+  // ************* ZOOMING *************
+  private startZooming(e: TouchEvent): void {
+    // If drawing, stop it
+    if (this.mode === Mode.DRAWING) {
+      this.cutoffDrawing();
+    }
+    this.mode = Mode.ZOOMING;
+    this.pinchStartDist = this.getPinchDistance(e);
+    this.lastScale = this.scale;
+    this.pinchStartMid = this.getAverageCoordinates(e);
+    this.pinchStartOffset = { ...this.offset };
+  }
+
+  private continueZooming(e: TouchEvent): void {
+    const newDist = this.getPinchDistance(e);
+    if (this.pinchStartDist === 0) return;
+    let newScale = this.lastScale * (newDist / this.pinchStartDist);
+    newScale = Math.max(0.2, Math.min(newScale, 5)); // Clamp zoom
+    // Calculate new offset so zoom is centered on pinch midpoint
+    const mid = this.getAverageCoordinates(e);
+    const dx = (mid.x - this.pinchStartMid.x) / this.scale;
+    const dy = (mid.y - this.pinchStartMid.y) / this.scale;
+    // Adjust offset to keep the pinch center stable
+    const scaleRatio = newScale / this.lastScale;
+    this.offset = {
+      x: (this.pinchStartOffset.x + dx - (this.pinchStartMid.x - this.pinchStartOffset.x) * (scaleRatio - 1)),
+      y: (this.pinchStartOffset.y + dy - (this.pinchStartMid.y - this.pinchStartOffset.y) * (scaleRatio - 1)),
+    };
+    this.scale = newScale;
+    this.redraw();
+  }
+
+  private stopZooming(): void {
+    this.mode = Mode.IDLE;
+    this.pinchStartDist = 0;
+  }
+
   // ************* PANNING *************
   private startPanning(e: TouchEvent): void {
     if (this.mode === Mode.DRAWING) {
-      if (this.hasMoved) {
-        this.stopDrawing(e)
-      } else {
-        // We only keep the current stroke if we've moved - this is to stop phantom dots
-        this.currentStroke = null;
-        this.redraw();
-      }
+      this.cutoffDrawing();
     }
     this.mode = Mode.PANNING;
     this.panStart = this.getAverageCoordinates(e);
@@ -139,12 +200,11 @@ class Whiteboard {
     if (this.mode !== Mode.DRAWING) return;
     this.hasMoved = true;
     const coords = this.getCoordinates(e);
-    
     this.currentStroke?.points.push(coords);
     this.redraw();
   }
 
-  private stopDrawing(e: MouseEvent | TouchEvent): void {
+  private stopDrawing(): void {
     if (this.mode !== Mode.DRAWING) return;
     if (this.currentStroke) {
       this.strokes.push(this.currentStroke);
@@ -158,17 +218,34 @@ class Whiteboard {
   private getCoordinates(e: MouseEvent | TouchEvent): Coordinates {
     const rect = this.canvas.getBoundingClientRect();
     const event = e instanceof MouseEvent ? e : e.touches[0] || e.changedTouches[0];
-    
     return {
-      x: event.clientX - rect.left - this.offset.x,
-      y: event.clientY - rect.top - this.offset.y,
+      x: (event.clientX - rect.left - this.offset.x) / this.scale,
+      y: (event.clientY - rect.top - this.offset.y) / this.scale,
     };
   }
 
   private getAverageCoordinates(e: TouchEvent): Coordinates {
     return {
-      x: e.touches[0].clientX + e.touches[1].clientX / 2,
-      y: e.touches[0].clientY + e.touches[1].clientY / 2,
+      x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+      y: (e.touches[0].clientY + e.touches[1].clientY) / 2,
+    }
+  }
+
+  private getPinchDistance(e: TouchEvent): number {
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  // If we have a drawing in progress, we save it to start the new gesture. OR if it's a dot, we cancel it entirely - stops phantom dots
+  private cutoffDrawing(): void {
+    if (this.mode === Mode.DRAWING) {
+      if (this.hasMoved) {
+        this.stopDrawing();
+      } else {
+        this.currentStroke = null;
+        this.redraw();
+      }
     }
   }
 
@@ -177,9 +254,8 @@ class Whiteboard {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     this.ctx.save();
     this.ctx.translate(this.offset.x, this.offset.y);
-
+    this.ctx.scale(this.scale, this.scale);
     this.drawStrokes();
-
     this.ctx.restore();
   }
 

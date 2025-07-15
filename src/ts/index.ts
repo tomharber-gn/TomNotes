@@ -82,6 +82,9 @@ class Whiteboard {
   // ************* TOUCH EVENTS *************
   private handleTouchStart(e: TouchEvent): void {
     if (e.touches.length === 2) {
+      if (this.mode === Mode.DRAWING) {
+        this.cutoffDrawing();
+      }
       this.mode = Mode.PENDING;
       this.gestureInitialDist = this.getPinchDistance(e);
       this.gestureInitialMid = this.getAverageCoordinates(e);
@@ -124,10 +127,6 @@ class Whiteboard {
 
   // ************* ZOOMING *************
   private startZooming(e: TouchEvent): void {
-    // If drawing, stop it
-    if (this.mode === Mode.DRAWING) {
-      this.cutoffDrawing();
-    }
     this.mode = Mode.ZOOMING;
     this.pinchStartDist = this.getPinchDistance(e);
     this.lastScale = this.scale;
@@ -161,9 +160,6 @@ class Whiteboard {
 
   // ************* PANNING *************
   private startPanning(e: TouchEvent): void {
-    if (this.mode === Mode.DRAWING) {
-      this.cutoffDrawing();
-    }
     this.mode = Mode.PANNING;
     this.panStart = this.getAverageCoordinates(e);
     this.lastOffset = this.offset;
@@ -239,13 +235,11 @@ class Whiteboard {
 
   // If we have a drawing in progress, we save it to start the new gesture. OR if it's a dot, we cancel it entirely - stops phantom dots
   private cutoffDrawing(): void {
-    if (this.mode === Mode.DRAWING) {
-      if (this.hasMoved) {
-        this.stopDrawing();
-      } else {
-        this.currentStroke = null;
-        this.redraw();
-      }
+    if (this.hasMoved) {
+      this.stopDrawing();
+    } else {
+      this.currentStroke = null;
+      this.redraw();
     }
   }
 

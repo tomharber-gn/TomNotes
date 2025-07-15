@@ -9,12 +9,12 @@ const HOST = _config.server.host;
 const PORT = _config.server.port;
 
 export default {
+  base: '/TomNotes/',
   server: {
     host: HOST,
     port: PORT
   },
   build: {
-    base: '/TomNotes/',
     outDir: 'build',
     emptyOutDir: true,
   },

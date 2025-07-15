@@ -14,6 +14,7 @@ export default {
     port: PORT
   },
   build: {
+    base: '/TomNotes/',
     outDir: 'build',
     emptyOutDir: true,
   },

@@ -13,6 +13,10 @@ export default {
     host: HOST,
     port: PORT
   },
+  build: {
+    outDir: 'build',
+    emptyOutDir: true,
+  },
   plugins: [
     legacy(),
     partytownVite({
